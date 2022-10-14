@@ -8,8 +8,8 @@ use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::Span,
-    widgets::{Block, BorderType, Borders, Paragraph},
+    text::{Span, Spans, Text},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
     Frame, Terminal,
 };
 use unicode_width::UnicodeWidthStr;
@@ -23,6 +23,8 @@ struct App {
     response: String,
     input_mode: InputMode,
     url: String,
+    logs: Vec<String>,
+    current_window: i32,
 }
 
 impl Default for App {
@@ -31,11 +33,14 @@ impl Default for App {
             response: String::new(),
             input_mode: InputMode::Normal,
             url: String::new(),
+            logs: Vec::new(),
+            current_window: 1,
         }
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -45,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // create app and run it
     let app = App::default();
-    let res = run_app(&mut terminal, app);
+    let res = run_app(&mut terminal, app).await;
 
     // restore terminal
     disable_raw_mode()?;
@@ -63,7 +68,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
+async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, &app))?;
 
@@ -77,10 +82,18 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                         return Ok(());
                     }
                     KeyCode::Enter => {
-                        let response = get_request(&app.url);
+                        app.logs.push(String::from("Fetching results..."));
+                        let response = get_request(&app.url).await;
                         app.response = match response {
                             Ok(body) => body,
                             Err(e) => panic!("Error: {:?}", e),
+                        };
+                        app.logs.push(String::from("Done"));
+                    }
+                    KeyCode::Tab => {
+                        app.current_window += 1;
+                        if app.current_window == 5 {
+                            app.current_window = 0
                         }
                     }
                     _ => {}
@@ -116,15 +129,21 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         .split(chunks[0]);
 
     // Top left inner block with green background
-    let input = Paragraph::new("GET").block(Block::default().borders(Borders::ALL).title("Method"));
+    let input = Paragraph::new("GET")
+        .style(if app.current_window == 0 {
+            match app.input_mode {
+                InputMode::Normal => Style::default().fg(Color::Cyan),
+                InputMode::Editing => Style::default().fg(Color::Yellow),
+            }
+        } else {
+            Style::default()
+        })
+        .block(Block::default().borders(Borders::ALL).title("Method"));
     f.render_widget(input, top_chunks[0]);
 
     // Top right inner block with styled title aligned to the right
     let input = Paragraph::new(app.url.as_ref())
-        .style(match app.input_mode {
-            InputMode::Normal => Style::default(),
-            InputMode::Editing => Style::default().fg(Color::Yellow),
-        })
+        .style(get_style(&app.current_window, 1, &app.input_mode))
         .block(Block::default().borders(Borders::ALL).title("URL"));
     f.render_widget(input, top_chunks[1]);
     match app.input_mode {
@@ -149,18 +168,81 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         .constraints([Constraint::Percentage(20), Constraint::Percentage(80)].as_ref())
         .split(chunks[1]);
 
+    let bottom_right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(90), Constraint::Percentage(10)].as_ref())
+        .split(bottom_chunks[1]);
+
     // Bottom left block with all default borders
-    let block = Block::default().title("Place Holder").borders(Borders::ALL);
+    let block = Block::default()
+        .style(if app.current_window == 2 {
+            match app.input_mode {
+                InputMode::Normal => Style::default().fg(Color::Cyan),
+                InputMode::Editing => Style::default().fg(Color::Yellow),
+            }
+        } else {
+            Style::default()
+        })
+        .title("Place Holder")
+        .borders(Borders::ALL);
     f.render_widget(block, bottom_chunks[0]);
 
     // Bottom right block with styled left and right border
     let response = Paragraph::new(app.response.as_ref())
+        .style(if app.current_window == 3 {
+            match app.input_mode {
+                InputMode::Normal => Style::default().fg(Color::Cyan),
+                InputMode::Editing => Style::default().fg(Color::Yellow),
+            }
+        } else {
+            Style::default()
+        })
         .block(Block::default().borders(Borders::ALL).title("Response"));
-    f.render_widget(response, bottom_chunks[1]);
+    f.render_widget(response, bottom_right_chunks[0]);
+
+    let logs: Vec<ListItem> = app
+        .logs
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m)))];
+            ListItem::new(content)
+        })
+        .collect();
+
+    let logs = List::new(logs)
+        .style(if app.current_window == 4 {
+            match app.input_mode {
+                InputMode::Normal => Style::default().fg(Color::Cyan),
+                InputMode::Editing => Style::default().fg(Color::Yellow),
+            }
+        } else {
+            Style::default()
+        })
+        .block(Block::default().borders(Borders::ALL).title("Logs"));
+    f.render_widget(logs, bottom_right_chunks[1]);
 }
 
-fn get_request(url: &String) -> Result<String, Box<dyn Error>> {
-    let res = reqwest::blocking::get(url)?;
+fn get_style(current_window: &i32, this_window: i32, input_mode: &InputMode) -> Style {
+    if *current_window == this_window {
+        match input_mode {
+            InputMode::Normal => Style::default().fg(Color::Cyan),
+            InputMode::Editing => Style::default().fg(Color::Yellow),
+        }
+    } else {
+        Style::default()
+    }
+}
+
+async fn get_request(url: &String) -> Result<String, Box<dyn Error>> {
+    let new_url;
+    if !url.starts_with("http") {
+        new_url = String::from("https://") + url;
+    } else {
+        new_url = String::from(url);
+    }
+
+    let res = reqwest::get(new_url).await?;
 
     Ok(res.status().to_string())
 }
