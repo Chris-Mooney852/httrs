@@ -13,3 +13,10 @@ tui = "0.19"
 crossterm = "0.25.0"
 unicode-width = "0.1.10"
 futures = "0.3.24"
+serde_json = "1.0.86"
+regex = "1.6.0"
+memchr = "2.3.4"
+
+[lib]
+name = "jsonxf"
+path = "src/jsonxf.rs"

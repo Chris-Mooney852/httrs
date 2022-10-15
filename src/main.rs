@@ -3,6 +3,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use regex::Regex;
 use std::{error::Error, fmt, io};
 use tui::{
     backend::{Backend, CrosstermBackend},
@@ -13,6 +14,7 @@ use tui::{
     Frame, Terminal,
 };
 use unicode_width::UnicodeWidthStr;
+extern crate jsonxf;
 
 enum InputMode {
     Normal,
@@ -242,7 +244,13 @@ async fn get_request(url: &String) -> Result<String, Box<dyn Error>> {
         new_url = String::from(url);
     }
 
-    let res = reqwest::get(new_url).await?;
+    let mut res = reqwest::get(new_url).await?.text().await?;
 
-    Ok(res.status().to_string())
+    let mut xf = jsonxf::Formatter::pretty_printer();
+    let formatted = match xf.format(&mut res) {
+        Ok(body) => body,
+        Err(e) => panic!("Error: {:?}", e),
+    };
+
+    Ok(formatted)
 }
